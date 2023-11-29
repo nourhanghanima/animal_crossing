@@ -1,0 +1,170 @@
+---
+title: "Text Analysis on Animal Crossing Reviews"
+author: "Nourhan Ghanima"
+date: "2023-11-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Animal Crossing
+
+
+Animal Crossing: New Horizons is a 2020 life simulation video game developed and published by Nintendo for the Nintendo Switch. It is the fifth main series title in the Animal Crossing series. New Horizons was released in all regions on March 20, 2020. It's been one of the most popular games globally since 2020. 
+
+New Horizons sees the player assuming the role of a customizable character who moves to a deserted island after purchasing a package from Tom Nook, a tanuki character who has appeared in every entry in the Animal Crossing series. Taking place in real-time, the player can explore the island in a nonlinear fashion, gathering and crafting items, catching insects and fish, and developing the island into a community of anthropomorphic animals.
+
+
+## Basic Setup
+
+I start as usual by loading the required libraries. 
+
+
+```{r, message = FALSE}
+library(tidyverse)
+library(tidytext)
+library(widyr)
+library(igraph)
+library(ggraph)
+
+```
+
+
+```{r, message = FALSE}
+user_reviews <- readr::read_tsv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-05/user_reviews.tsv', show_col_types = FALSE)
+```
+
+The reviews data has 4 columns, a user name, the grade each user assigned, the text of the review, and finally the date of the review. The grades range from 0 to 10, with 10 being the highest. 
+```{r}
+head(user_reviews)
+```
+
+
+The next step is to separate the reviews into words and getting rid of the stop words. Stop words are common words that have little or no significance in a text analysis; they are common words that by themselves don't carry much information. They're removed to improve efficiency and accuracy. This code chunk creates a list of words for each user that left a review. 
+
+```{r}
+review_words <- user_reviews |>
+  unnest_tokens(output = word, input = text) |>
+  anti_join(stop_words, by = "word") |>
+  filter(str_detect(word, "[:alpha:]")) |>
+  distinct()
+```
+
+I then count the number of times a word is used by different users, filtering by words used by 100 or more users. 
+```{r}
+users_who_mention_word <- review_words |>
+  dplyr::count(word, name = "users_n") |>
+  filter(users_n >= 100)
+```
+
+
+I then look at the correlations of words across users. 
+
+```{r}
+word_correlations <- review_words |>
+  semi_join(users_who_mention_word, by = "word") |>
+  pairwise_cor(item = word, feature = user_name) |>
+  filter(correlation >= 0.2)
+
+word_correlations
+  
+```
+
+
+
+## A Word Network Plot
+
+I then create a word network plot, including only the words that are correlated and excluding any words that appear by themselves. Darker lines show a higher word correlation. 
+
+```{r, warning=FALSE, echo = FALSE, message = FALSE}
+graph_from_data_frame(d = word_correlations,
+                      vertices = users_who_mention_word |>
+                      semi_join(word_correlations, by = c("word" = "item1"))) |>
+                      ggraph(layout = "fr") +
+                      geom_edge_link(aes(alpha = correlation)) +
+                      geom_node_point() +
+                      geom_node_text(aes(label = name), repel = 
+                      TRUE)+theme_graph(base_family="sans")
+```
+
+# Creating a function 
+```{r, warning=FALSE, message=FALSE}
+generate_word_graph <- function (review_words,
+                                 minimum_users_n = 100,
+                                 minimum_correlation = 0.2){
+  users_who_mention_word <- review_words |>
+  dplyr::count(word, name = "users_n") |>
+  filter(users_n >= minimum_users_n)
+  
+  word_correlations <- review_words |>
+  semi_join(users_who_mention_word, by = "word") |>
+  pairwise_cor(item = word, feature = user_name) |>
+  filter(correlation >= minimum_correlation) 
+  
+  graph_from_data_frame(d = word_correlations,
+                      vertices = users_who_mention_word |>
+                      semi_join(word_correlations, by = c("word" = "item1"))) |>
+                      ggraph(layout = "fr") +
+                      geom_edge_link(aes(alpha = correlation)) +
+                      geom_node_point() +
+                      geom_node_text(aes(label = name), repel = TRUE)
+  
+}
+```
+```{r, warning=FALSE}
+review_words |>
+  generate_word_graph(
+    minimum_users_n = 100,
+    minimum_correlation = 0.2 
+  ) 
+```
+
+
+## Generating plots for positive and negative reviews
+```{r}
+review_words_negative <- review_words |>
+  filter(grade < 5)
+
+review_words_positive <- review_words |>
+  filter(grade >= 5)
+```
+
+```{r, warning=FALSE}
+review_words_negative |>
+  generate_word_graph(
+    minimum_users_n = 40,
+    minimum_correlation = 0.2
+  )
+```
+
+
+
+There seems to be a theme with online friends in the negative reviews, and it's something worth exploring. 
+
+```{r, warning=FALSE}
+review_words_positive |>
+    generate_word_graph(
+    minimum_users_n = 30,
+    minimum_correlation = 0.25
+  )
+```
+
+
+
+The positive reviews seem to mention review bombing often, a problem not uncommon in gaming and media more generally. Review bombing in gaming refers to a coordinated effort by a large number of individuals to leave negative reviews or ratings of a game on online platforms. 
+
+```{r}
+review_words |>
+  distinct(user_name, .keep_all = TRUE) |>
+  select(grade, user_name) |>
+  filter (grade < 1) |>
+  dplyr::count(grade)
+```
+
+
+
+1158 users gave the game a grade of 0, which is often argued by the gaming community that it's a score that should solely be given if the game were actually broken. The review bombing seems to have been brought on by the developing team's decision to limit its users to one island per console, which is an obvious theme when looking at the graph for the negative reviews above. 
+
+
